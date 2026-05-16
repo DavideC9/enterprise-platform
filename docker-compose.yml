@@ -1,0 +1,124 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  CMS Backend – Docker Compose (Production)
+#  Server: OVH Linux
+#  Immagini salvate in volume persistente o bind mount locale
+# ══════════════════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: cms_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    # Sicurezza: non esporre porta postgres all'esterno in produzione
+    # ports:
+    #   - "5432:5432"
+
+  # ── FastAPI Backend ─────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: cms-backend:latest
+    container_name: cms_backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_SERVER: postgres
+      POSTGRES_PORT: 5432
+    volumes:
+      # ┌─────────────────────────────────────────────────────────────────────┐
+      # │  MEDIA PERSISTENTE – scegli UNA delle due opzioni:                  │
+      # │                                                                      │
+      # │  OPZIONE A (consigliata): bind mount verso cartella OVH reale       │
+      # │    - /var/www/my-backend/media:/media                               │
+      # │                                                                      │
+      # │  OPZIONE B: volume Docker gestito (attualmente attivo)              │
+      # │    - media_data:/media                                               │
+      # └─────────────────────────────────────────────────────────────────────┘
+      #
+      # ── OPZIONE A (bind mount, decommentare questa riga e commentare B) ────
+      # - /var/www/my-backend/media:/media
+      #
+      # ── OPZIONE B (volume Docker, attivo di default) ─────────────────────
+      - media_data:/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend_net
+    # Backend non esposto direttamente: Nginx fa da proxy
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ── Nginx Reverse Proxy ─────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: cms_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      # Nginx serve i file media direttamente (più efficiente del proxy)
+      - media_data:/var/www/media:ro
+      # SSL certificates (Let's Encrypt / Certbot)
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - certbot_www:/var/www/certbot:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - backend_net
+
+  # ── Certbot (opzionale, solo se usi Let's Encrypt) ─────────────────────────
+  # certbot:
+  #   image: certbot/certbot:latest
+  #   volumes:
+  #     - ./nginx/ssl:/etc/letsencrypt
+  #     - certbot_www:/var/www/certbot
+  #   entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait; done'"
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  VOLUMI PERSISTENTI
+#  postgres_data  → dati PostgreSQL (non perdersi MAI)
+#  media_data     → immagini caricate dagli admin
+#                   alternativa: bind mount /var/www/my-backend/media
+# ══════════════════════════════════════════════════════════════════════════════
+volumes:
+  postgres_data:
+    driver: local
+  media_data:
+    driver: local
+  certbot_www:
+    driver: local
+
+networks:
+  backend_net:
+    driver: bridge

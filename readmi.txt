@@ -1,0 +1,225 @@
+# CMS Backend
+
+Backend production-ready per la gestione di contenuti e immagini, costruito con FastAPI + PostgreSQL + Docker.
+
+---
+
+## Stack
+
+- **Python 3.12** + FastAPI
+- **PostgreSQL 16** + SQLAlchemy async
+- **Docker Compose** — deploy semplice
+- **Nginx** — reverse proxy (produzione)
+- **JWT** — autenticazione admin
+
+---
+
+## Avvio in locale
+
+### 1. Requisiti
+- Docker Desktop installato e avviato
+
+### 2. Crea il file `.env` nella root del progetto
+
+```env
+SECRET_KEY=cambia-questa-chiave-segreta-con-qualcosa-di-lungo-e-random
+POSTGRES_SERVER=postgres
+POSTGRES_USER=cmsuser
+POSTGRES_PASSWORD=cmspassword123
+POSTGRES_DB=cmsdb
+POSTGRES_PORT=5432
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=AdminPassword123!
+PUBLIC_BASE_URL=http://localhost:8000
+BACKEND_CORS_ORIGINS_RAW=*
+MAX_UPLOAD_SIZE_MB=10
+```
+
+### 3. Avvia
+
+```bash
+docker compose -f docker-compose.test.yml up --build
+```
+
+Il backend sarà disponibile su `http://localhost:8000`
+L'utente admin viene creato automaticamente al primo avvio.
+
+---
+
+## API
+
+### Documentazione interattiva (Swagger)
+```
+http://localhost:8000/api/v1/docs
+```
+
+### Endpoint pubblici (no token)
+
+| Metodo | URL | Descrizione |
+|--------|-----|-------------|
+| GET | `/health` | Stato del server |
+| GET | `/api/v1/content` | Lista sezioni pubblicate |
+| GET | `/api/v1/content/{key}` | Sezione per chiave |
+
+### Autenticazione
+
+```bash
+curl -X POST http://localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"AdminPassword123!"}'
+```
+
+Risposta:
+```json
+{ "access_token": "eyJ...", "token_type": "bearer", "expires_in": 86400 }
+```
+
+### Endpoint admin (richiedono token)
+
+| Metodo | URL | Descrizione |
+|--------|-----|-------------|
+| GET | `/api/v1/admin/sections` | Lista tutte le sezioni |
+| POST | `/api/v1/admin/sections` | Crea sezione |
+| PUT | `/api/v1/admin/sections/{key}` | Aggiorna sezione |
+| DELETE | `/api/v1/admin/sections/{key}` | Elimina sezione |
+| POST | `/api/v1/admin/media` | Upload immagine |
+
+### Creare una sezione con immagine
+
+```bash
+# 1. Upload immagine
+curl -X POST http://localhost:8000/api/v1/admin/media \
+  -H "Authorization: Bearer TOKEN" \
+  -F "file=@/percorso/immagine.jpg" \
+  -F "folder=home"
+
+# 2. Crea sezione con l'URL ricevuto
+curl -X POST http://localhost:8000/api/v1/admin/sections \
+  -H "Authorization: Bearer TOKEN" \
+  -F "key=home" \
+  -F "title=Homepage" \
+  -F "text=Benvenuto nel sito" \
+  -F "image_url=http://localhost:8000/media/home/nomefile.jpg"
+
+# 3. Verifica (pubblico)
+curl http://localhost:8000/api/v1/content/home
+```
+
+---
+
+## Struttura progetto
+
+```
+cms-backend/
+├── app/
+│   ├── api/v1/endpoints/   # auth, content, admin_sections, media
+│   ├── core/               # config, security, media, log_config
+│   ├── db/                 # session, init_db
+│   ├── models/             # AdminUser, Section (SQLAlchemy)
+│   ├── schemas/            # Pydantic schemas
+│   └── services/           # SectionService
+├── alembic/                # Migrazioni database
+├── nginx/                  # Config Nginx
+├── docker-compose.yml      # Produzione
+├── docker-compose.test.yml # Locale
+├── Dockerfile
+└── .env
+```
+
+---
+
+## Immagini e media
+
+Le immagini vengono salvate **direttamente sul server** — nessun servizio esterno.
+
+- **Locale**: cartella `./media_local` nella root del progetto
+- **Produzione**: volume Docker `media_data` oppure bind mount `/var/www/my-backend/media`
+
+URL pubblico immagini: `http://localhost:8000/media/{subfolder}/{filename}`
+
+Limiti upload configurabili da `.env`:
+- Formato: JPG, PNG, WEBP, GIF
+- Dimensione massima: `MAX_UPLOAD_SIZE_MB` (default 10MB)
+
+---
+
+## Database
+
+Connessione locale con DBeaver o psql:
+
+```
+Host:     localhost
+Port:     5432
+Database: cmsdb
+User:     cmsuser
+Password: cmspassword123
+```
+
+Da terminale:
+```bash
+docker compose -f docker-compose.test.yml exec postgres psql -U cmsuser -d cmsdb
+```
+
+---
+
+## Deploy su OVH (produzione)
+
+### 1. Sul server
+
+```bash
+git clone <repo> && cd cms-backend
+cp .env.example .env
+# modifica .env con i valori di produzione
+```
+
+### 2. Configura `.env` produzione
+
+```env
+SECRET_KEY=chiave-molto-lunga-e-random-per-produzione
+PUBLIC_BASE_URL=https://api.tuodominio.it
+BACKEND_CORS_ORIGINS_RAW=https://tuodominio.it
+```
+
+### 3. Configura Nginx
+
+Modifica `nginx/conf.d/default.conf` con il tuo dominio:
+```nginx
+server_name api.tuodominio.it;
+```
+
+### 4. SSL con Let's Encrypt
+
+```bash
+apt install certbot
+certbot certonly --standalone -d api.tuodominio.it
+cp /etc/letsencrypt/live/api.tuodominio.it/fullchain.pem nginx/ssl/
+cp /etc/letsencrypt/live/api.tuodominio.it/privkey.pem nginx/ssl/
+```
+
+### 5. Avvia in produzione
+
+```bash
+docker compose up -d --build
+```
+
+---
+
+## Comandi utili
+
+```bash
+# Avvia in locale
+docker compose -f docker-compose.test.yml up --build
+
+# Ferma
+docker compose -f docker-compose.test.yml down
+
+# Log backend
+docker compose -f docker-compose.test.yml logs -f backend
+
+# Accedi al DB
+docker compose -f docker-compose.test.yml exec postgres psql -U cmsuser -d cmsdb
+
+# Migrazione database (dopo aver modificato un modello)
+docker compose exec backend alembic revision --autogenerate -m "descrizione"
+docker compose exec backend alembic upgrade head
+```

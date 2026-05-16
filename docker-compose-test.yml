@@ -1,0 +1,62 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  CMS Backend – Docker Compose TEST (locale, standalone)
+#  Uso: docker compose -f docker-compose.test.yml up --build
+# ══════════════════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: cms_postgres_test
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cmsuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cmspassword123}
+      POSTGRES_DB: ${POSTGRES_DB:-cmsdb}
+    volumes:
+      - postgres_data_test:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - backend_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cmsuser} -d ${POSTGRES_DB:-cmsdb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── FastAPI Backend ─────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: cms_backend_test
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_SERVER: postgres
+      POSTGRES_PORT: 5432
+      ENVIRONMENT: development
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
+    volumes:
+      - .:/app
+      - ./media_local:/media
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend_net
+
+volumes:
+  postgres_data_test:
+    driver: local
+
+networks:
+  backend_net:
+    driver: bridge
